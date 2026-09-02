@@ -1,0 +1,306 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  --ease-move: cubic-bezier(0.77, 0, 0.175, 1);
+  color-scheme: light;
+}
+
+html {
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+body {
+  @apply bg-brand-mist font-sans text-ink text-[15px] leading-relaxed;
+}
+
+@layer components {
+  .ui-page {
+    @apply mx-auto w-full max-w-6xl px-4 py-6 sm:px-6 sm:py-8;
+  }
+
+  .ui-card {
+    @apply rounded-2xl bg-white p-4 shadow-surface sm:p-5;
+  }
+
+  .ui-title {
+    @apply text-2xl font-semibold tracking-tight text-ink sm:text-[1.65rem];
+  }
+
+  .ui-sub {
+    @apply mt-1 text-sm text-ink-muted;
+  }
+
+  .ui-label {
+    @apply block text-sm font-medium text-ink;
+  }
+
+  .ui-input {
+    @apply mt-1 w-full rounded-xl border-0 bg-slate-50 px-3 py-2.5 text-sm text-ink shadow-[inset_0_0_0_1px_rgb(15_23_42/0.08)] outline-none transition-[box-shadow,background-color] duration-150 ease-out;
+  }
+
+  .ui-input:focus {
+    @apply bg-white shadow-[inset_0_0_0_2px_#185FA5];
+  }
+
+  .ui-btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-xl px-3.5 py-2 text-sm font-medium outline-none;
+    transition: transform 140ms var(--ease-out), background-color 150ms ease, opacity 150ms ease;
+  }
+
+  .ui-btn:active {
+    transform: scale(0.97);
+  }
+
+  .ui-btn:disabled {
+    @apply cursor-not-allowed opacity-50;
+  }
+
+  .ui-btn:focus-visible {
+    box-shadow: 0 0 0 3px rgb(24 95 165 / 0.35);
+  }
+
+  .ui-btn-primary {
+    @apply ui-btn bg-brand text-white shadow-surface;
+  }
+
+  .ui-btn-ghost {
+    @apply ui-btn bg-white text-ink shadow-[inset_0_0_0_1px_rgb(15_23_42/0.08)];
+  }
+
+  .ui-btn-quiet {
+    @apply ui-btn bg-transparent px-2 py-1 text-xs font-medium text-brand;
+  }
+
+  .ui-role {
+    @apply ui-btn rounded-full px-2.5 py-1 text-xs font-medium;
+  }
+
+  .ui-role-on {
+    @apply bg-brand text-white shadow-none;
+  }
+
+  .ui-role-off {
+    @apply bg-slate-100 text-ink-muted shadow-none;
+  }
+
+  .ui-role:disabled {
+    @apply cursor-not-allowed opacity-70;
+  }
+
+  .ui-table-wrap {
+    @apply -mx-1 overflow-x-auto sm:mx-0;
+  }
+
+  .ui-table {
+    @apply w-full min-w-[32rem] text-sm;
+  }
+
+  .ui-table th {
+    @apply pb-2 text-left text-xs font-medium uppercase tracking-wide text-ink-faint;
+  }
+
+  .ui-panrb {
+    @apply w-full min-w-[52rem] border-collapse text-[13px] leading-snug text-ink;
+  }
+
+  .ui-panrb th,
+  .ui-panrb td {
+    border: 1px solid #0f172a;
+    vertical-align: top;
+  }
+
+  .ui-panrb thead th {
+    @apply bg-slate-200 px-3 py-2.5 text-center text-xs font-bold uppercase tracking-wide;
+  }
+
+  .ui-panrb td {
+    @apply px-3 py-2.5;
+  }
+
+  .ui-panrb-num {
+    @apply w-10 text-center font-medium;
+  }
+
+  .ui-panrb-name {
+    @apply mb-1.5 font-semibold underline;
+  }
+
+  .ui-panrb ul {
+    @apply ml-4 list-disc space-y-0.5;
+  }
+
+  .ui-nav {
+    @apply rounded-lg px-3 py-2 text-sm text-white/80;
+    transition: background-color 150ms ease, color 150ms ease;
+  }
+
+  .ui-nav-active {
+    @apply bg-white/15 font-semibold text-white;
+  }
+
+  .ui-avatar {
+    @apply inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-white/20 text-[11px] font-semibold;
+  }
+
+  .ui-account-trigger {
+    @apply ui-btn max-w-[14rem] gap-2 !bg-white/10 !px-2 !py-1.5 !text-white !shadow-none;
+  }
+
+  .ui-account-menu {
+    @apply absolute right-0 top-[calc(100%+0.5rem)] z-30 w-56 rounded-xl bg-white py-2 text-ink shadow-lift;
+  }
+
+  .ui-account-item {
+    @apply block px-3 py-2 text-sm text-ink;
+  }
+
+  .ui-banner {
+    @apply rounded-xl bg-brand-light px-3 py-2 text-sm text-brand-dark;
+  }
+
+  .ui-toast-stack {
+    @apply pointer-events-none fixed bottom-4 right-4 z-50 flex w-[min(22rem,calc(100vw-2rem))] flex-col-reverse gap-2;
+  }
+
+  .ui-toast {
+    @apply pointer-events-auto rounded-xl px-3.5 py-3 text-sm shadow-lift;
+    animation: toast-in 200ms var(--ease-out);
+  }
+
+  .ui-toast-ok {
+    @apply bg-ink text-white;
+  }
+
+  .ui-toast-error {
+    @apply bg-rose-800 text-white;
+  }
+
+  .ui-tabs {
+    @apply flex gap-1 overflow-x-auto rounded-2xl bg-white p-1 shadow-surface;
+    scrollbar-width: none;
+  }
+
+  .ui-tabs::-webkit-scrollbar {
+    display: none;
+  }
+
+  .ui-tab {
+    @apply ui-btn relative shrink-0 flex-1 px-1.5 py-2 text-center text-[11px] font-medium leading-tight text-ink-muted sm:px-2 sm:text-xs;
+    white-space: normal;
+  }
+
+  .ui-tab:disabled {
+    @apply cursor-not-allowed opacity-45;
+  }
+
+  .ui-tab-active {
+    @apply bg-brand text-white;
+  }
+
+  .ui-fb-chip {
+    @apply shrink-0 rounded-full px-2.5 py-0.5 text-xs font-medium;
+  }
+
+  .ui-fb-chip-low {
+    @apply bg-amber-50 text-amber-900;
+  }
+
+  .ui-fb-chip-mid {
+    @apply bg-slate-100 text-slate-700;
+  }
+
+  .ui-fb-chip-high {
+    @apply bg-emerald-50 text-emerald-800;
+  }
+
+  .ui-tab-done:not(.ui-tab-active)::after {
+    content: "";
+    @apply absolute right-1.5 top-1.5 h-1.5 w-1.5 rounded-full bg-emerald-500;
+  }
+
+  .ui-sticky-bar {
+    @apply sticky bottom-0 z-10 -mx-4 mt-5 border-t border-slate-100 bg-brand-mist/90 px-4 py-3 backdrop-blur-md sm:-mx-6 sm:px-6;
+  }
+
+  .ui-radio {
+    @apply flex cursor-pointer gap-3 rounded-xl bg-slate-50 p-3 text-sm shadow-[inset_0_0_0_1px_rgb(15_23_42/0.06)];
+    transition: background-color 150ms ease, box-shadow 150ms ease, transform 140ms var(--ease-out);
+  }
+
+  .ui-radio:active {
+    transform: scale(0.99);
+  }
+
+  .ui-radio:has(:checked) {
+    @apply bg-brand-light shadow-[inset_0_0_0_2px_#185FA5];
+  }
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .ui-btn-primary:hover {
+    background-color: #0f4a86;
+  }
+  .ui-btn-ghost:hover {
+    background-color: #f8fafc;
+  }
+  .ui-btn-quiet:hover {
+    background-color: rgb(24 95 165 / 0.08);
+  }
+  .ui-radio:hover:not(:has(:checked)) {
+    background-color: #f8fafc;
+  }
+  .ui-tab:hover:not(.ui-tab-active) {
+    background-color: #f8fafc;
+    color: #0f172a;
+  }
+  .ui-account-item:hover {
+    background-color: #f8fafc;
+  }
+  .ui-role-off:hover:not(:disabled) {
+    background-color: #e2e8f0;
+  }
+  .ui-nav:hover {
+    background-color: rgb(255 255 255 / 0.1);
+    color: white;
+  }
+}
+
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ui-btn,
+  .ui-radio,
+  .ui-input,
+  .ui-nav,
+  .ui-toast {
+    transition: none;
+    animation: none;
+  }
+  .ui-btn:active,
+  .ui-radio:active {
+    transform: none;
+  }
+}
+
+@media print {
+  .ui-page {
+    max-width: none;
+    padding: 0;
+  }
+  body {
+    background: white;
+  }
+}

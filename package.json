@@ -1,0 +1,12 @@
+{
+  "name": "penilaian-perilaku",
+  "private": true,
+  "workspaces": ["apps/*", "packages/*"],
+  "scripts": {
+    "dev": "bun run --filter api dev & bun run --filter web dev",
+    "dev:api": "bun run --filter api dev",
+    "dev:web": "bun run --filter web dev",
+    "db:seed": "bun run --filter api seed",
+    "test": "bun test packages/shared apps/api"
+  }
+}
