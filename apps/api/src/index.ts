@@ -1,3 +1,23 @@
+/**
+ * index.ts — Server API Utama (Elysia + Bun)
+ *
+ * File ini berisi seluruh endpoint REST API untuk aplikasi Penilaian Perilaku Kerja ASN.
+ * Menggunakan framework Elysia yang berjalan di runtime Bun.
+ *
+ * Struktur endpoint:
+ * - /api/health: Health check
+ * - /api/auth/*: Autentikasi (login, logout, change-password)
+ * - /api/me: Profil pengguna saat ini
+ * - /api/notifications: Notifikasi dalam aplikasi
+ * - /api/admin/*: Endpoint admin (periode, assignment, users, master data, reports)
+ * - /api/assessor/*: Endpoint penilai (daftar pegawai, formulir penilaian)
+ * - /api/employee/*: Endpoint pegawai (dashboard, riwayat)
+ * - /api/leadership/*: Endpoint pimpinan (dashboard agregat)
+ *
+ * Autentikasi: Cookie-based JWT (pp_session)
+ * CORS: Mengizinkan origin dari frontend (WEB_ORIGIN)
+ */
+
 import {
   CODE_TO_ID,
   ID_TO_CODE,
@@ -8,7 +28,7 @@ import {
   type NilaiCode,
   type Role,
 } from "@app/shared";
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, ne, sql } from "drizzle-orm";
 import { Elysia, t } from "elysia";
 import { db } from "./db";
 import { migrate } from "./migrate";
@@ -16,13 +36,17 @@ import * as sch from "./schema";
 import { seed } from "./seed";
 import { buildImportTemplate, headerMatches, nipsMatch, normalizeNip, parseImportFile } from "./import-workbook";
 import {
+  assertCsrf,
   assertLoginAllowed,
   clearLoginAttempts,
   clearLoginAttemptsForEmail,
+  CSRF_COOKIE,
   DEFAULT_PASSWORD,
   descendantUnitIds,
+  generateCsrfToken,
   hasRole,
   hashPassword,
+  invalidateUnitHierarchyCache,
   loadUser,
   loginAttemptKey,
   notify,
@@ -35,41 +59,60 @@ import {
   type SessionUser,
 } from "./util";
 
+// Inialisasi: jalankan migrasi dan seed data
 migrate();
 await seed(false);
 
+// Konfigurasi
 const WEB_ORIGIN = process.env.WEB_ORIGIN ?? "http://localhost:5173";
-const COOKIE = "pp_session";
+if (WEB_ORIGIN === "*") {
+  console.warn("[SECURITY] WEB_ORIGIN diatur ke '*' — ini tidak aman untuk production. Ganti dengan origin yang spesifik.");
+}
+const COOKIE = "pp_session"; // Nama cookie sesi
 
+/**
+ * Mengkonversi baris assessment dari database menjadi tipe AssessmentScores.
+ * Fungsi ini "memetakan" nama kolom database (nilaiBp) ke kode nilai (BP).
+ */
 function scoresFromRow(row: typeof sch.assessments.$inferSelect): AssessmentScores {
   return {
-    BP: row.nilaiBp,
-    AK: row.nilaiAk,
-    KP: row.nilaiKp,
-    HM: row.nilaiHm,
-    LY: row.nilaiLy,
-    AD: row.nilaiAd,
-    KB: row.nilaiKb,
+    "ND-01-BP": row.nilaiBp,
+    "ND-02-AK": row.nilaiAk,
+    "ND-03-KP": row.nilaiKp,
+    "ND-04-HM": row.nilaiHm,
+    "ND-05-LY": row.nilaiLy,
+    "ND-06-AD": row.nilaiAd,
+    "ND-07-KB": row.nilaiKb,
   };
 }
 
+/**
+ * Membuat objek penilaian publik (untuk dikirim ke frontend).
+ * Menghitung skor dan mengambil data umpan balik.
+ *
+ * @param forEmployee - Jika true, hanya sertakan feedback yang ditampilkan ke pegawai
+ */
 function publicAssessment(row: typeof sch.assessments.$inferSelect, forEmployee: boolean) {
   const scores = scoresFromRow(row);
   const calc = calculateScores(scores);
+
+  // Ambil semua umpan balik untuk assessment ini
   const fbs = db
     .select()
     .from(sch.assessmentFeedbacks)
     .where(eq(sch.assessmentFeedbacks.assessmentId, row.id))
     .all()
+    // Filter: jika untuk pegawai, hanya sertakan yang includeForEmployee = 1
     .filter((f) => (forEmployee ? f.includeForEmployee === 1 : true))
     .map((f) => ({
       nilaiDasarId: f.nilaiDasarId,
-      nilaiDasarCode: ID_TO_CODE[f.nilaiDasarId],
+      nilaiDasarCode: ID_TO_CODE[f.nilaiDasarId], // Konversi ID ke kode
       level: f.level,
       feedbackText: f.finalText,
       wasCustomized: Boolean(f.isEdited),
       includeForEmployee: Boolean(f.includeForEmployee),
     }));
+
   return {
     id: row.id,
     assignmentId: row.assignmentId,
@@ -86,13 +129,24 @@ function publicAssessment(row: typeof sch.assessments.$inferSelect, forEmployee:
   };
 }
 
+/**
+ * Membuat header cookie untuk Set-Cookie response.
+ * Cookie bersifat HttpOnly (tidak bisa diakses JS), SameSite=Lax, dan berlaku 24 jam.
+ *
+ * @param clear - Jika true, hapus cookie (Max-Age=0)
+ */
 function cookieHeader(token: string, clear = false) {
   if (clear) {
     return `${COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0`;
   }
-  return `${COOKIE}=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=86400`;
+  const secure = process.env.NODE_ENV === "production" ? "; Secure" : "";
+  return `${COOKIE}=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=86400${secure}`;
 }
 
+/**
+ * Mengekstrak nilai cookie dari header Cookie HTTP.
+ * Mengembalikan nilai cookie atau undefined jika tidak ditemukan.
+ */
 function getCookie(header: string | undefined, name: string) {
   if (!header) return undefined;
   const parts = header.split(";").map((p) => p.trim());
@@ -100,28 +154,59 @@ function getCookie(header: string | undefined, name: string) {
   return hit?.slice(name.length + 1);
 }
 
+// ==================== INISIALISASI ELYSIA ====================
+
 const app = new Elysia()
+  // Middleware CORS: mengizinkan frontend mengakses API
   .onRequest(({ request, set }) => {
     set.headers["Access-Control-Allow-Origin"] = WEB_ORIGIN;
     set.headers["Access-Control-Allow-Credentials"] = "true";
-    set.headers["Access-Control-Allow-Headers"] = "Content-Type";
+    set.headers["Access-Control-Allow-Headers"] = "Content-Type, X-CSRF-Token";
     set.headers["Access-Control-Allow-Methods"] = "GET,POST,PATCH,DELETE,OPTIONS";
+    // Handle preflight request (OPTIONS)
     if (request.method === "OPTIONS") {
       set.status = 204;
     }
   })
   .options("/*", () => "")
+
+  // Middleware autentikasi: decode cookie JWT dan load data pengguna
+  // Hasilnya tersedia di semua route sebagai { user, ip }
   .derive(({ request }) => {
     const token = getCookie(request.headers.get("cookie") ?? undefined, COOKIE);
     const payload = verifyToken(token);
     const user = payload ? loadUser(payload.sub) : null;
-    return { user, ip: request.headers.get("x-forwarded-for") ?? "local" };
+    // Sanitize IP: ambil hanya IP pertama (kiri) dari x-forwarded-for
+    const rawIp = request.headers.get("x-forwarded-for") ?? "local";
+    const ip = rawIp.includes(",") ? rawIp.split(",")[0].trim() : rawIp;
+    return { user, ip };
   })
+
+  // CSRF validation: setiap POST/PATCH/DELETE (kecuali login & logout) harus punya CSRF token
+  .onRequest(({ request, set }) => {
+    const method = request.method;
+    if (method === "POST" || method === "PATCH" || method === "DELETE") {
+      // Skip CSRF untuk login & logout (belum ada session / session akan dihapus)
+      const url = new URL(request.url);
+      if (url.pathname !== "/api/auth/login" && url.pathname !== "/api/auth/logout") {
+        try {
+          assertCsrf(request);
+        } catch (e) {
+          set.status = (e as { status?: number }).status ?? 403;
+          return { error: { code: 403, message: (e as Error).message } };
+        }
+      }
+    }
+  })
+
+  // Global error handler: mengembalikan error dalam format JSON
   .onError(({ error, set }) => {
     const status = (error as { status?: number }).status ?? 500;
     set.status = status;
     return { error: { code: status, message: error.message } };
   })
+
+  // ==================== HEALTH CHECK ====================
   .get("/api/health", () => ({ ok: true }))
   .post(
     "/api/auth/login",
@@ -149,14 +234,23 @@ const app = new Elysia()
         .set({ lastLogin: now(), updatedAt: now() })
         .where(eq(sch.users.id, userRow.id))
         .run();
-      const token = signToken({ sub: userRow.id });
-      set.headers["Set-Cookie"] = cookieHeader(token);
+      const token = signToken({ sub: userRow.id, ver: userRow.tokenVersion });
+      const csrfToken = generateCsrfToken();
+      const secure = process.env.NODE_ENV === "production" ? "; Secure" : "";
+      set.headers["set-cookie"] = [
+        cookieHeader(token),
+        `${CSRF_COOKIE}=${csrfToken}; Path=/; SameSite=Lax; Max-Age=86400${secure}`,
+      ];
       return { user: loadUser(userRow.id) };
     },
     { body: t.Object({ email: t.String(), password: t.String() }) },
   )
   .post("/api/auth/logout", ({ set }) => {
-    set.headers["Set-Cookie"] = cookieHeader("", true);
+    const secure = process.env.NODE_ENV === "production" ? "; Secure" : "";
+    set.headers["set-cookie"] = [
+      cookieHeader("", true),
+      `${CSRF_COOKIE}=; Path=/; SameSite=Lax; Max-Age=0${secure}`,
+    ];
     return { ok: true };
   })
   .get("/api/me", ({ user, set }) => {
@@ -225,7 +319,12 @@ const app = new Elysia()
       }
       const hash = await hashPassword(body.password);
       db.update(sch.users)
-        .set({ passwordHash: hash, mustChangePassword: 0, updatedAt: now() })
+        .set({
+          passwordHash: hash,
+          mustChangePassword: 0,
+          tokenVersion: sql`${sch.users.tokenVersion} + 1`,
+          updatedAt: now(),
+        })
         .where(eq(sch.users.id, user!.id))
         .run();
       return { ok: true };
@@ -240,8 +339,8 @@ const app = new Elysia()
         .from(sch.notifications)
         .where(eq(sch.notifications.userId, user!.id))
         .orderBy(desc(sch.notifications.createdAt))
-        .all()
-        .slice(0, 50),
+        .limit(50)
+        .all(),
     };
   })
   .post("/api/notifications/:id/read", ({ user, params }) => {
@@ -410,13 +509,23 @@ const app = new Elysia()
     const users = db.select().from(sch.users).all();
     const roles = db.select().from(sch.userRoles).all();
     const units = db.select().from(sch.units).all();
+    // Bangun Maps untuk O(1) lookup
+    const roleMap = new Map<string, string[]>();
+    for (const r of roles) {
+      const list = roleMap.get(r.userId);
+      if (list) list.push(r.role);
+      else roleMap.set(r.userId, [r.role]);
+    }
+    const unitMap = new Map(units.map((u) => [u.id, u.name]));
     return {
-      data: users.map((u) => ({
-        ...u,
-        passwordHash: undefined,
-        roles: roles.filter((r) => r.userId === u.id).map((r) => r.role),
-        unitName: units.find((x) => x.id === u.unitId)?.name ?? null,
-      })),
+      data: users.map((u) => {
+        const { passwordHash: _, ...safe } = u;
+        return {
+          ...safe,
+          roles: roleMap.get(u.id) ?? [],
+          unitName: unitMap.get(u.unitId) ?? null,
+        };
+      }),
     };
   })
   .post(
@@ -462,8 +571,26 @@ const app = new Elysia()
   )
   .patch(
     "/api/admin/users/:id",
-    ({ user, params, body }) => {
+    ({ user, params, body, set }) => {
       requireRole(user, ["admin"]);
+      // Cegah admin menonaktifkan diri sendiri
+      if (params.id === user!.id && body.isActive === 0) {
+        set.status = 400;
+        return { error: { code: 400, message: "Tidak bisa menonaktifkan akun sendiri" } };
+      }
+      // Cegah admin menonaktifkan admin lain
+      if (body.isActive === 0) {
+        const targetRoles = db
+          .select()
+          .from(sch.userRoles)
+          .where(eq(sch.userRoles.userId, params.id))
+          .all()
+          .map((r) => r.role);
+        if (targetRoles.includes("admin")) {
+          set.status = 400;
+          return { error: { code: 400, message: "Tidak bisa menonaktifkan akun admin lain" } };
+        }
+      }
       db.update(sch.users)
         .set({
           fullName: body.fullName,
@@ -539,6 +666,7 @@ const app = new Elysia()
       .set({
         passwordHash: await hashPassword(DEFAULT_PASSWORD),
         mustChangePassword: 1,
+        tokenVersion: sql`${sch.users.tokenVersion} + 1`,
         updatedAt: now(),
       })
       .where(eq(sch.users.id, params.id))
@@ -565,6 +693,7 @@ const app = new Elysia()
         updatedAt: now(),
       };
       db.insert(sch.units).values(row).run();
+      invalidateUnitHierarchyCache();
       return { data: row };
     },
     {
@@ -576,6 +705,183 @@ const app = new Elysia()
       }),
     },
   )
+  .patch(
+    "/api/admin/units/:id",
+    ({ user, params, body, set }) => {
+      requireRole(user, ["admin"]);
+      const unit = db.select().from(sch.units).where(eq(sch.units.id, params.id)).get();
+      if (!unit) {
+        set.status = 404;
+        return { error: { code: 404, message: "Unit tidak ditemukan" } };
+      }
+      db.update(sch.units)
+        .set({
+          ...(body.name !== undefined ? { name: body.name } : {}),
+          ...(body.code !== undefined ? { code: body.code } : {}),
+          ...(body.level !== undefined ? { level: body.level } : {}),
+          ...(body.parentUnitId !== undefined ? { parentUnitId: body.parentUnitId || null } : {}),
+          ...(body.isActive !== undefined ? { isActive: body.isActive ? 1 : 0 } : {}),
+          updatedAt: now(),
+        })
+        .where(eq(sch.units.id, params.id))
+        .run();
+      invalidateUnitHierarchyCache();
+      return { ok: true, data: db.select().from(sch.units).where(eq(sch.units.id, params.id)).get() };
+    },
+    {
+      body: t.Object({
+        name: t.Optional(t.String()),
+        code: t.Optional(t.String()),
+        level: t.Optional(t.String()),
+        parentUnitId: t.Optional(t.Nullable(t.String())),
+        isActive: t.Optional(t.Boolean()),
+      }),
+    },
+  )
+  .patch(
+    "/api/admin/units/:id",
+    ({ user, params, body, set }) => {
+      requireRole(user, ["admin"]);
+      const unit = db.select().from(sch.units).where(eq(sch.units.id, params.id)).get();
+      if (!unit) {
+        set.status = 404;
+        return { error: { code: 404, message: "Unit tidak ditemukan" } };
+      }
+      db.update(sch.units)
+        .set({
+          ...(body.name !== undefined ? { name: body.name } : {}),
+          ...(body.code !== undefined ? { code: body.code } : {}),
+          ...(body.level !== undefined ? { level: body.level } : {}),
+          ...(body.parentUnitId !== undefined ? { parentUnitId: body.parentUnitId || null } : {}),
+          ...(body.isActive !== undefined ? { isActive: body.isActive ? 1 : 0 } : {}),
+          updatedAt: now(),
+        })
+        .where(eq(sch.units.id, params.id))
+        .run();
+      invalidateUnitHierarchyCache();
+      return { ok: true, data: db.select().from(sch.units).where(eq(sch.units.id, params.id)).get() };
+    },
+    {
+      body: t.Object({
+        name: t.Optional(t.String()),
+        code: t.Optional(t.String()),
+        level: t.Optional(t.String()),
+        parentUnitId: t.Optional(t.Nullable(t.String())),
+        isActive: t.Optional(t.Boolean()),
+      }),
+    },
+  )
+  .delete("/api/admin/units/:id", ({ user, params, set }) => {
+    requireRole(user, ["admin"]);
+    const unit = db.select().from(sch.units).where(eq(sch.units.id, params.id)).get();
+    if (!unit) {
+      set.status = 404;
+      return { error: { code: 404, message: "Unit tidak ditemukan" } };
+    }
+    // Cek apakah ada pegawai di unit ini
+    const count = db.select().from(sch.users).where(eq(sch.users.unitId, params.id)).all().length;
+    if (count > 0) {
+      set.status = 400;
+      return { error: { code: 400, message: `Tidak bisa menghapus unit yang masih memiliki ${count} pegawai terdaftar.` } };
+    }
+    // Cek apakah ada child unit
+    const childCount = db.select().from(sch.units).where(eq(sch.units.parentUnitId, params.id)).all().length;
+    if (childCount > 0) {
+      set.status = 400;
+      return { error: { code: 400, message: `Tidak bisa menghapus unit yang masih memiliki ${childCount} anak unit.` } };
+    }
+    // Cek apakah ada unit leader untuk unit ini
+    const leaderCount = db.select().from(sch.unitLeaders).where(eq(sch.unitLeaders.unitId, params.id)).all().length;
+    if (leaderCount > 0) {
+      set.status = 400;
+      return { error: { code: 400, message: `Tidak bisa menghapus unit yang masih memiliki ${leaderCount} pimpinan unit.` } };
+    }
+    db.delete(sch.units).where(eq(sch.units.id, params.id)).run();
+    invalidateUnitHierarchyCache();
+    return { ok: true };
+  })
+  .get("/api/admin/unit-leaders", ({ user }) => {
+    requireRole(user, ["admin", "leadership"]);
+    const unitLeaders = db.select().from(sch.unitLeaders).all();
+    const users = db.select().from(sch.users).all();
+    const units = db.select().from(sch.units).all();
+    const userMap = new Map(users.map(u => [u.id, u]));
+    const unitMap = new Map(units.map(u => [u.id, u]));
+
+    return {
+      data: unitLeaders.map(ul => ({
+        ...ul,
+        userName: userMap.get(ul.userId)?.fullName || "-",
+        unitName: unitMap.get(ul.unitId)?.name || "-",
+      })),
+    };
+  })
+  .post(
+    "/api/admin/unit-leaders",
+    ({ user, body, set }) => {
+      requireRole(user, ["admin"]);
+      const unit = db.select().from(sch.units).where(eq(sch.units.id, body.unitId)).get();
+      if (!unit) {
+        set.status = 404;
+        return { error: { code: 404, message: "Unit tidak ditemukan" } };
+      }
+      const existingLeader = db.select().from(sch.unitLeaders).where(and(eq(sch.unitLeaders.unitId, body.unitId), eq(sch.unitLeaders.userId, body.userId))).get();
+      if (existingLeader) {
+        set.status = 409;
+        return { error: { code: 409, message: "User ini sudah menjadi pimpinan unit ini" } };
+      }
+      const row = {
+        unitId: body.unitId,
+        userId: body.userId,
+        leaderRole: body.leaderRole,
+        createdAt: now(),
+        updatedAt: now(),
+      };
+      db.insert(sch.unitLeaders).values(row).run();
+      return { data: row };
+    },
+    {
+      body: t.Object({
+        unitId: t.String(),
+        userId: t.String(),
+        leaderRole: t.String(),
+      }),
+    },
+  )
+  .patch(
+    "/api/admin/unit-leaders/:unitId/:userId",
+    ({ user, params, body, set }) => {
+      requireRole(user, ["admin"]);
+      const existing = db.select().from(sch.unitLeaders).where(and(eq(sch.unitLeaders.unitId, params.unitId), eq(sch.unitLeaders.userId, params.userId))).get();
+      if (!existing) {
+        set.status = 404;
+        return { error: { code: 404, message: "Pimpinan unit tidak ditemukan" } };
+      }
+      db.update(sch.unitLeaders)
+        .set({
+          leaderRole: body.leaderRole,
+          updatedAt: now(),
+        })
+        .where(and(eq(sch.unitLeaders.unitId, params.unitId), eq(sch.unitLeaders.userId, params.userId)))
+        .run();
+      return { ok: true };
+    },
+    {
+      body: t.Object({
+        leaderRole: t.String(),
+      }),
+    },
+  )
+  .delete("/api/admin/unit-leaders/:unitId/:userId", ({ user, params, set }) => {
+    requireRole(user, ["admin"]);
+    const existing = db.select().from(sch.unitLeaders).where(and(eq(sch.unitLeaders.unitId, params.unitId), eq(sch.unitLeaders.userId, params.userId))).get();
+    if (!existing) {
+      set.status = 404;
+      return { error: { code: 404, message: "Pimpinan unit tidak ditemukan" } };
+    }
+    db.delete(sch.unitLeaders).where(and(eq(sch.unitLeaders.unitId, params.unitId), eq(sch.unitLeaders.userId, params.userId))).run();
+    return { ok: true };
+  })
   .get("/api/admin/periods/:id/assignments", ({ user, params }) => {
     requireRole(user, ["admin"]);
     const assigns = db
@@ -699,7 +1005,18 @@ const app = new Elysia()
     }
     const errors: string[] = [];
     let created = 0;
-    const findByNip = (target: string) => db.select().from(sch.users).all().find((u) => nipsMatch(u.nip, target));
+    // Cache semua user ke Map untuk O(1) lookup (menghindari N+1 query)
+    const allUsers = db.select().from(sch.users).all();
+    const userByNip = new Map<string, typeof allUsers[number]>();
+    for (const u of allUsers) {
+      if (u.nip) userByNip.set(u.nip, u);
+    }
+    const findByNip = (target: string) => {
+      for (const [nip, u] of userByNip) {
+        if (nipsMatch(nip, target)) return u;
+      }
+      return undefined;
+    };
 
     type ParsedRow = {
       line: number;
@@ -872,6 +1189,7 @@ const app = new Elysia()
         .run();
     }
 
+    invalidateUnitHierarchyCache();
     return { imported: ok, errors, created, defaultPassword: DEFAULT_PASSWORD };
   })
   .get("/api/admin/master", ({ user }) => {
@@ -942,8 +1260,8 @@ const app = new Elysia()
   .get("/api/admin/reports/audit", ({ user }) => {
     requireRole(user, ["admin"]);
     return {
-      assessments: db.select().from(sch.assessmentHistory).orderBy(desc(sch.assessmentHistory.createdAt)).all().slice(0, 200),
-      master: db.select().from(sch.masterDataAudit).orderBy(desc(sch.masterDataAudit.changedAt)).all().slice(0, 200),
+      assessments: db.select().from(sch.assessmentHistory).orderBy(desc(sch.assessmentHistory.createdAt)).limit(200).all(),
+      master: db.select().from(sch.masterDataAudit).orderBy(desc(sch.masterDataAudit.changedAt)).limit(200).all(),
     };
   })
   .get("/api/admin/reports/export", ({ user, query, set }) => {
@@ -968,11 +1286,14 @@ const app = new Elysia()
       .filter((a) => a.assessorId === user!.id);
     const users = db.select().from(sch.users).all();
     const assessments = db.select().from(sch.assessments).where(eq(sch.assessments.periodId, periodId)).all();
+    // Bangun Maps untuk O(1) lookup
+    const userMap = new Map(users.map((u) => [u.id, u]));
+    const asgMap = new Map(assessments.map((a) => [a.assignmentId, a]));
     return {
       periodId,
       data: assigns.map((a) => {
-        const emp = users.find((u) => u.id === a.employeeId);
-        const as = assessments.find((x) => x.assignmentId === a.id);
+        const emp = userMap.get(a.employeeId);
+        const as = asgMap.get(a.id);
         return {
           ...a,
           employeeName: emp?.fullName,
@@ -1049,13 +1370,13 @@ const app = new Elysia()
         periodId: asg.periodId,
         employeeId: asg.employeeId,
         assessorId: user!.id,
-        nilaiBp: scores.BP,
-        nilaiAk: scores.AK,
-        nilaiKp: scores.KP,
-        nilaiHm: scores.HM,
-        nilaiLy: scores.LY,
-        nilaiAd: scores.AD,
-        nilaiKb: scores.KB,
+        nilaiBp: scores["ND-01-BP"],
+        nilaiAk: scores["ND-02-AK"],
+        nilaiKp: scores["ND-03-KP"],
+        nilaiHm: scores["ND-04-HM"],
+        nilaiLy: scores["ND-05-LY"],
+        nilaiAd: scores["ND-06-AD"],
+        nilaiKb: scores["ND-07-KB"],
         totalScore: calc.totalScore,
         scoreScale120: calc.scoreScale120,
         budayaEksekusiEfektif: calc.budayaEksekusiEfektif,
@@ -1077,25 +1398,30 @@ const app = new Elysia()
           .run();
       }
       const templates = db.select().from(sch.feedbackTemplates).all();
-      for (const code of NILAI_CODES) {
+      // Bangun Map untuk O(1) lookup template
+      const tplMap = new Map<string, string>();
+      for (const t of templates) {
+        tplMap.set(`${t.nilaiDasarId}:${t.level}`, t.templateText);
+      }
+      // Batch insert 7 feedbacks dalam satu operasi
+      const feedbackRows = NILAI_CODES.map((code) => {
         const nid = CODE_TO_ID[code];
         const level = scores[code];
-        const tpl = templates.find((x) => x.nilaiDasarId === nid && x.level === level)?.templateText ?? "";
+        const tpl = tplMap.get(`${nid}:${level}`) ?? "";
         const incoming = body.feedbacks?.find((f) => f.nilaiDasarCode === code);
         const finalText = (incoming?.finalText ?? tpl).slice(0, 300);
-        db.insert(sch.assessmentFeedbacks)
-          .values({
-            id: uid("afb"),
-            assessmentId,
-            nilaiDasarId: nid,
-            level,
-            templateText: tpl,
-            finalText,
-            isEdited: finalText !== tpl ? 1 : 0,
-            includeForEmployee: incoming?.includeForEmployee === false ? 0 : 1,
-          })
-          .run();
-      }
+        return {
+          id: uid("afb"),
+          assessmentId,
+          nilaiDasarId: nid,
+          level,
+          templateText: tpl,
+          finalText,
+          isEdited: finalText !== tpl ? 1 : 0,
+          includeForEmployee: incoming?.includeForEmployee === false ? 0 : 1,
+        };
+      });
+      db.insert(sch.assessmentFeedbacks).values(feedbackRows).run();
       db.update(sch.assessmentAssignments)
         .set({ status, updatedAt: ts })
         .where(eq(sch.assessmentAssignments.id, asg.id))
@@ -1127,7 +1453,15 @@ const app = new Elysia()
       body: t.Object({
         assignmentId: t.String(),
         action: t.Union([t.Literal("draft"), t.Literal("submit")]),
-        scores: t.Record(t.String(), t.Number()),
+        scores: t.Object({
+          "ND-01-BP": t.Number({ minimum: 1, maximum: 5 }),
+          "ND-02-AK": t.Number({ minimum: 1, maximum: 5 }),
+          "ND-03-KP": t.Number({ minimum: 1, maximum: 5 }),
+          "ND-04-HM": t.Number({ minimum: 1, maximum: 5 }),
+          "ND-05-LY": t.Number({ minimum: 1, maximum: 5 }),
+          "ND-06-AD": t.Number({ minimum: 1, maximum: 5 }),
+          "ND-07-KB": t.Number({ minimum: 1, maximum: 5 }),
+        }),
         feedbacks: t.Optional(
           t.Array(
             t.Object({
@@ -1187,7 +1521,7 @@ const app = new Elysia()
     };
   })
   .get("/api/employee/assessments/:id", ({ user, params, set }) => {
-    requireRole(user, ["employee", "admin", "assessor", "leadership"]);
+    requireRole(user, ["employee"]);
     const row = db.select().from(sch.assessments).where(eq(sch.assessments.id, params.id)).get();
     if (!row || row.employeeId !== user!.id || row.status === "draft") {
       set.status = 404;
@@ -1237,12 +1571,22 @@ const app = new Elysia()
   })
   .listen(Number(process.env.PORT ?? 3000));
 
+// ==================== FUNGSI PEMBANTU ====================
+
+/**
+ * Mendapatkan periode aktif, atau periode terbaru jika tidak ada yang aktif.
+ * Digunakan oleh endpoint yang tidak menentukan periode secara eksplisit.
+ */
 function activePeriod() {
   return db.select().from(sch.assessmentPeriods).where(eq(sch.assessmentPeriods.status, "active")).get()
     ?? db.select().from(sch.assessmentPeriods).orderBy(desc(sch.assessmentPeriods.year)).all()[0]
     ?? null;
 }
 
+/**
+ * Mendapatkan ID periode: gunakan yang eksplisit jika ada, atau periode aktif.
+ * Melempar error 400 jika tidak ada periode sama sekali.
+ */
 function resolvePeriodId(explicit?: string) {
   if (explicit) return explicit;
   const p = activePeriod();
@@ -1250,48 +1594,94 @@ function resolvePeriodId(explicit?: string) {
   return p.id;
 }
 
+/**
+ * Membuat laporan agregat untuk admin dan pimpinan.
+ *
+ * Menghitung:
+ * - Total pegawai yang dinilai vs yang belum
+ * - Rata-rata skor 120 dan 3 dimensi budaya kerja
+ * - Peringkat unit berdasarkan rata-rata skor
+ * - Distribusi level penilaian (1-5)
+ *
+ * Pimpinan hanya melihat unit di bawah hierarki mereka.
+ */
 function aggregatedReport(user: SessionUser, periodId?: string) {
   const pid = resolvePeriodId(periodId);
   const period = db.select().from(sch.assessmentPeriods).where(eq(sch.assessmentPeriods.id, pid)).get();
+
+  // Filter unit yang diizinkan (untuk role non-admin)
+  let allowedUnitFilter: Set<string> | null = null;
+  if (!hasRole(user, "admin") && user.unitId) {
+    allowedUnitFilter = descendantUnitIds(user.unitId);
+  }
+
+  // Ambil assignments — filter by unit langsung di JS karena SQLite tidak support IN dengan Set
   let assigns = db
     .select()
     .from(sch.assessmentAssignments)
     .where(eq(sch.assessmentAssignments.periodId, pid))
     .all();
-  if (!hasRole(user, "admin") && user.unitId) {
-    const allowed = descendantUnitIds(user.unitId);
-    assigns = assigns.filter((a) => allowed.has(a.unitId));
+  if (allowedUnitFilter) {
+    assigns = assigns.filter((a) => allowedUnitFilter!.has(a.unitId));
   }
+
+  // Ambil assessments yang SUDAH disubmit (bukan draft) — filter di SQL
   const assessments = db
     .select()
     .from(sch.assessments)
-    .where(eq(sch.assessments.periodId, pid))
-    .all()
-    .filter((a) => a.status !== "draft");
+    .where(
+      and(eq(sch.assessments.periodId, pid), ne(sch.assessments.status, "draft")),
+    )
+    .all();
+
+  // Bangun Maps untuk O(1) lookup
   const byAssignment = new Map(assessments.map((a) => [a.assignmentId, a]));
   const units = db.select().from(sch.units).all();
-  const submitted = assigns.filter((a) => byAssignment.has(a.id));
+  const unitMap = new Map(units.map((u) => [u.id, u]));
+
+  // Hitung jumlah assignment per unit (sekali loop, bukan filter di setiap iterasi)
+  const assignedPerUnit = new Map<string, number>();
+  for (const a of assigns) {
+    assignedPerUnit.set(a.unitId, (assignedPerUnit.get(a.unitId) ?? 0) + 1);
+  }
+
+  // Kumpulkan scores per unit dalam satu pass
+  const scoresByUnit = new Map<string, typeof assessments>();
+  const scores: typeof assessments = [];
+  for (const a of assigns) {
+    const asm = byAssignment.get(a.id);
+    if (!asm) continue;
+    scores.push(asm);
+    const list = scoresByUnit.get(a.unitId);
+    if (list) list.push(asm);
+    else scoresByUnit.set(a.unitId, [asm]);
+  }
+
+  // Fungsi helper: rata-rata array angka
   const avg = (xs: number[]) => (xs.length ? xs.reduce((s, n) => s + n, 0) / xs.length : 0);
-  const scores = submitted.map((a) => byAssignment.get(a.id)!);
-  const byUnit = units
-    .map((u) => {
-      const list = submitted.filter((a) => a.unitId === u.id).map((a) => byAssignment.get(a.id)!);
-      if (!list.length) return null;
+  const round2 = (n: number) => Math.round(n * 100) / 100;
+
+  // Kalkulasi rata-rata per unit — hanya unit yang punya skor
+  const byUnit = [...scoresByUnit.entries()]
+    .map(([unitId, list]) => {
+      const u = unitMap.get(unitId);
+      if (!u) return null;
       return {
-        unitId: u.id,
+        unitId,
         unitName: u.name,
         count: list.length,
-        totalAssigned: assigns.filter((a) => a.unitId === u.id).length,
-        avg120: Math.round(avg(list.map((x) => x.scoreScale120)) * 100) / 100,
-        ee: Math.round(avg(list.map((x) => x.budayaEksekusiEfektif)) * 100) / 100,
-        ck: Math.round(avg(list.map((x) => x.budayaCaraKerjaBaru)) * 100) / 100,
-        pu: Math.round(avg(list.map((x) => x.budayaPelayananUnggul)) * 100) / 100,
+        totalAssigned: assignedPerUnit.get(unitId) ?? 0,
+        avg120: round2(avg(list.map((x) => x.scoreScale120))),
+        ee: round2(avg(list.map((x) => x.budayaEksekusiEfektif))),
+        ck: round2(avg(list.map((x) => x.budayaCaraKerjaBaru))),
+        pu: round2(avg(list.map((x) => x.budayaPelayananUnggul))),
         kategori: getCategory(avg(list.map((x) => x.scoreScale120))),
       };
     })
     .filter(Boolean)
     .sort((a, b) => (b!.avg120 ?? 0) - (a!.avg120 ?? 0));
 
+  // Distribusi level: berapa pegawai di setiap level BARS rata-rata
   const dist = [1, 2, 3, 4, 5].map((level) => ({
     level,
     count: scores.filter((s) => Math.round(s.totalScore / 7) === level).length,
@@ -1300,12 +1690,12 @@ function aggregatedReport(user: SessionUser, periodId?: string) {
   return {
     period,
     totalAssigned: assigns.length,
-    done: submitted.length,
-    percent: assigns.length ? Math.round((submitted.length / assigns.length) * 100) : 0,
-    avg120: Math.round(avg(scores.map((s) => s.scoreScale120)) * 100) / 100,
-    avgEE: Math.round(avg(scores.map((s) => s.budayaEksekusiEfektif)) * 100) / 100,
-    avgCK: Math.round(avg(scores.map((s) => s.budayaCaraKerjaBaru)) * 100) / 100,
-    avgPU: Math.round(avg(scores.map((s) => s.budayaPelayananUnggul)) * 100) / 100,
+    done: scores.length,
+    percent: assigns.length ? Math.round((scores.length / assigns.length) * 100) : 0,
+    avg120: round2(avg(scores.map((s) => s.scoreScale120))),
+    avgEE: round2(avg(scores.map((s) => s.budayaEksekusiEfektif))),
+    avgCK: round2(avg(scores.map((s) => s.budayaCaraKerjaBaru))),
+    avgPU: round2(avg(scores.map((s) => s.budayaPelayananUnggul))),
     kategori: getCategory(avg(scores.map((s) => s.scoreScale120))),
     byUnit,
     distribution: dist,

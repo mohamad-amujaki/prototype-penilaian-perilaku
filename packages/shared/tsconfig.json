@@ -1,10 +1,11 @@
 {
   "compilerOptions": {
-    "target": "ES2022",
+    "target": "ESNext",
     "module": "ESNext",
     "moduleResolution": "bundler",
+    "types": ["bun-types"],
     "strict": true,
-    "skipLibCheck": true,
-    "types": ["bun-types", "node"]
-  }
+    "skipLibCheck": true
+  },
+  "include": ["src"]
 }

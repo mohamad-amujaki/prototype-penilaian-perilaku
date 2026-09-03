@@ -1,9 +1,9 @@
 # PRD Final — Web App Penilaian Perilaku Kerja ASN Kemenkes
 
-**Versi**: 2.1-final  
-**Tanggal**: 2 September 2026  
+**Versi**: 2.2-final  
+**Tanggal**: 3 September 2026  
 **Status**: Siap di-build (sumber kebenaran tunggal)  
-**Sumber**: `1 PRD-v2-0.md`, `2 PRD-AMENDMENT-FEEDBACK-FEATURE.md`, `3 PRD-AMENDMENT-MASTER-DATA-RADAR.md`, Excel `docs/2026.09.01 V2 Konsep Panduan Penilaian Perilaku BerAKHLAK (1).xlsx`, keputusan produk 2 Sep 2026  
+**Sumber**: `1 PRD-v2-0.md`, `2 PRD-AMENDMENT-FEEDBACK-FEATURE.md`, `3 PRD-AMENDMENT-MASTER-DATA-RADAR.md`, Excel `docs/2026.09.01 V2 Konsep Panduan Penilaian Perilaku BerAKHLAK (1).xlsx`, keputusan produk 2 Sep 2026, review codebase 3 Sep 2026  
 **Tujuan dokumen**: spesifikasi implementasi untuk vibecoding di Cursor. Jangan menambah fitur di luar dokumen ini.
 
 ---
@@ -153,13 +153,13 @@ Tujuh integer wajib, masing-masing `1 | 2 | 3 | 4 | 5`:
 
 | Kode | Nilai Dasar | Budaya Kerja |
 |------|-------------|--------------|
-| `BP` | Berorientasi Pelayanan | Pelayanan Unggul |
-| `AK` | Akuntabel | Eksekusi Efektif |
-| `KP` | Kompeten | Eksekusi Efektif |
-| `HM` | Harmonis | Pelayanan Unggul |
-| `LY` | Loyal | Eksekusi Efektif |
-| `AD` | Adaptif | Cara Kerja Baru |
-| `KB` | Kolaboratif | Cara Kerja Baru |
+| `ND-01-BP` | Berorientasi Pelayanan | Pelayanan Unggul |
+| `ND-02-AK` | Akuntabel | Eksekusi Efektif |
+| `ND-03-KP` | Kompeten | Eksekusi Efektif |
+| `ND-04-HM` | Harmonis | Pelayanan Unggul |
+| `ND-05-LY` | Loyal | Eksekusi Efektif |
+| `ND-06-AD` | Adaptif | Cara Kerja Baru |
+| `ND-07-KB` | Kolaboratif | Cara Kerja Baru |
 
 Pemetaan ini **tetap**. Tidak bisa diubah admin di V2.
 
@@ -168,12 +168,12 @@ Pemetaan ini **tetap**. Tidak bisa diubah admin di V2.
 ```
 skor_nilai_120(level) = (level / 5) * 120          // = level * 24
 
-total_mentah          = BP+AK+KP+HM+LY+AD+KB       // 7..35
+total_mentah          = ND-01-BP+ND-02-AK+ND-03-KP+ND-04-HM+ND-05-LY+ND-06-AD+ND-07-KB   // 7..35
 nilai_perilaku_120    = (total_mentah / 35) * 120
 
-eksekusi_efektif      = avg(AK, KP, LY) / 5 * 120
-cara_kerja_baru       = avg(AD, KB) / 5 * 120
-pelayanan_unggul      = avg(BP, HM) / 5 * 120
+eksekusi_efektif      = avg(ND-02-AK, ND-03-KP, ND-05-LY) / 5 * 120
+cara_kerja_baru       = avg(ND-06-AD, ND-07-KB) / 5 * 120
+pelayanan_unggul      = avg(ND-01-BP, ND-04-HM) / 5 * 120
 ```
 
 Pembulatan: **2 desimal**, half-up (`Math.round(x * 100) / 100`).
@@ -206,13 +206,13 @@ Jangan memakai predikat 40/50/60/…/100 di kolom F Excel (itu konsep KemenPANRB
 
 ### 5.4 Contoh kanonik (wajib di tes)
 
-Sumber rumus: Excel Sheet2. Input: BP=1, AK=2, KP=5, HM=4, LY=3, AD=4, KB=5
+Sumber rumus: Excel Sheet2. Input: ND-01-BP=1, ND-02-AK=2, ND-03-KP=5, ND-04-HM=4, ND-05-LY=3, ND-06-AD=4, ND-07-KB=5
 
 | Output | Nilai |
 |--------|-------|
 | Total mentah | 24 / 35 |
 | Nilai perilaku 120 | 82.29 → **Butuh Perbaikan** |
-| BP / AK / KP / HM / LY / AD / KB (skala 120) | 24 / 48 / 120 / 96 / 72 / 96 / 120 |
+| ND-01-BP / ND-02-AK / ND-03-KP / ND-04-HM / ND-05-LY / ND-06-AD / ND-07-KB (skala 120) | 24 / 48 / 120 / 96 / 72 / 96 / 120 |
 | Eksekusi Efektif `avg(2,5,3)/5*120` | 80.00 → Butuh Perbaikan |
 | Cara Kerja Baru `avg(4,5)/5*120` | 108.00 → Baik |
 | Pelayanan Unggul `avg(1,4)/5*120` | 60.00 → Kurang |
@@ -344,7 +344,7 @@ Setiap user aktif otomatis punya role `employee`. Role `assessor` ditambahkan sa
 
 ```
 nilai_dasar
-  id, code unique (BP|AK|KP|HM|LY|AD|KB), name, description, sortOrder
+  id, code unique (ND-01-BP|ND-02-AK|ND-03-KP|ND-04-HM|ND-05-LY|ND-06-AD|ND-07-KB), name, description, sortOrder
   updatedAt, updatedBy → users.id
 
 panduan_perilaku
@@ -364,7 +364,7 @@ feedback_templates
   UNIQUE(nilaiDasarId, level)
 
 budaya_kerja          -- 3 baris tetap
-  id, code (EE|CK|PU), name
+  id, code (BK-01-EE|BK-02-CK|BK-03-PU), name
   -- EE=Eksekusi Efektif, CK=Cara Kerja Baru, PU=Pelayanan Unggul
 ```
 
@@ -493,10 +493,10 @@ Body submit:
 {
   "assignmentId": "…",
   "action": "draft" | "submit",
-  "scores": { "BP": 1, "AK": 2, "KP": 5, "HM": 4, "LY": 3, "AD": 4, "KB": 5 },
+  "scores": { "ND-01-BP": 1, "ND-02-AK": 2, "ND-03-KP": 5, "ND-04-HM": 4, "ND-05-LY": 3, "ND-06-AD": 4, "ND-07-KB": 5 },
   "feedbacks": [
     {
-      "nilaiDasarCode": "BP",
+      "nilaiDasarCode": "ND-01-BP",
       "finalText": "…",
       "includeForEmployee": true
     }
@@ -633,13 +633,13 @@ Typo Excel yang dinormalisasi:
 
 | id | code | name | description |
 |----|------|------|-------------|
-| nilai_bp | BP | Berorientasi Pelayanan | Komitmen memberikan pelayanan prima demi kepuasan masyarakat |
-| nilai_ak | AK | Akuntabel | Bertanggung jawab atas kepercayaan yang diberikan |
-| nilai_kp | KP | Kompeten | Terus belajar dan mengembangkan kapabilitas |
-| nilai_hm | HM | Harmonis | Saling peduli dan menghargai perbedaan |
-| nilai_ly | LY | Loyal | Berdedikasi dan mengutamakan kepentingan bangsa dan negara |
-| nilai_ad | AD | Adaptif | Terus berinovasi dan antusias dalam menggerakkan serta menghadapi perubahan |
-| nilai_kb | KB | Kolaboratif | Membangun kerja sama yang sinergis |
+| nilai_bp | ND-01-BP | Berorientasi Pelayanan | Komitmen memberikan pelayanan prima demi kepuasan masyarakat |
+| nilai_ak | ND-02-AK | Akuntabel | Bertanggung jawab atas kepercayaan yang diberikan |
+| nilai_kp | ND-03-KP | Kompeten | Terus belajar dan mengembangkan kapabilitas |
+| nilai_hm | ND-04-HM | Harmonis | Saling peduli dan menghargai perbedaan |
+| nilai_ly | ND-05-LY | Loyal | Berdedikasi dan mengutamakan kepentingan bangsa dan negara |
+| nilai_ad | ND-06-AD | Adaptif | Terus berinovasi dan antusias dalam menggerakkan serta menghadapi perubahan |
+| nilai_kb | ND-07-KB | Kolaboratif | Membangun kerja sama yang sinergis |
 
 ### 10.2 Panduan perilaku (judul Excel kolom E)
 
@@ -759,31 +759,60 @@ Field `description` panduan boleh sama dengan `title` di V2 (Excel tidak punya u
 
 | NIP | Nama | Email | Role | Unit |
 |-----|------|-------|------|------|
-| 19750105199203001 | Anik Sri Handayani | anik@kemkes.go.id | admin, assessor, employee, leadership | Seksi Kinerja |
-| 19870217200912001 | Mohamad Arif Mujaki | arif.mujaki@kemkes.go.id | assessor, employee | Seksi Kinerja |
-| 19800605200812002 | Ani Suryani | ani.suryani@kemkes.go.id | employee | Seksi Kinerja |
-| 19650312197803001 | Budi Santoso | budi.santoso@kemkes.go.id | assessor, employee, leadership | Bagian SDM |
+| 199001011234567890 | Admin Utama | admin@demo.go.id | admin, assessor, employee, leadership | Biro Organisasi dan SDM |
+| 199202021234567891 | Budi Pratama | penilai@demo.go.id | assessor, employee | Tim Kerja Pengelolaan Kinerja Pegawai ASN |
+| 199303031234567892 | Siti Rahayu | pegawai@demo.go.id | employee | Tim Kerja Pengelolaan Kinerja Pegawai ASN |
+| 198504041234567893 | Ahmad Wijaya | pimpinan@demo.go.id | assessor, employee, leadership | Biro Umum |
+| 199405051234567894 | Dewi Lestari | dewi@demo.go.id | employee | Tim Kerja Gaji |
+| 199106061234567895 | Rudi Hartono | rudi@demo.go.id | employee | Tim Kerja Budaya Kerja |
 
-Password demo: `Password1`. Anik menilai Arif; Arif menilai Ani. Periode demo: Q1 2026, status `active`. Pimpinan puncak (jika ada di import) tetap di-assign assessor oleh admin.
+Password demo: `Password1`.
+
+### 10.6 Struktur unit organisasi
+
+```
+Sekretariat Jenderal (Unit Eselon 1)
+├── Biro Organisasi dan SDM (Unit Kerja)
+│   ├── Tim Kerja Pengelolaan Kinerja Pegawai ASN
+│   ├── Tim Kerja Sistem Informasi ASN
+│   └── Tim Kerja Dukungan Manajemen
+├── Biro Umum (Unit Kerja)
+│   ├── Tim Kerja Gaji
+│   ├── Tim Kerja Change Management
+│   └── Tim Kerja Dukungan Manajemen dan Rumah Tangga
+└── Pusat Pengembangan Kompetensi Aparatur (Unit Kerja)
+    ├── Tim Kerja Budaya Kerja
+    └── Tim Kerja Dukungan Manajemen
+```
+
+### 10.7 Skenario akses
+
+| Pengguna | Role | Unit | Bisa lihat |
+|----------|------|------|------------|
+| Admin Utama | admin, leadership | Biro OSDM | Semua tim di Biro OSDM (Pengelolaan Kinerja, Sistem Informasi, Dukungan Manajemen) |
+| Ahmad Wijaya | leadership | Biro Umum | Semua tim di Biro Umum (Gaji, Change Management, Dukungan Manajemen) |
+| Budi Pratama | assessor | Tim Kerja Pengelolaan Kinerja | Siti Rahayu (yang dinilainya) |
+| Siti Rahayu | employee | Tim Kerja Pengelolaan Kinerja | Hasil penilaian sendiri |
+| Dewi Lestari | employee | Tim Kerja Gaji | Hasil penilaian sendiri |
+| Rudi Hartono | employee | Tim Kerja Budaya Kerja | Hasil penilaian sendiri |
 
 ---
 
 ## 11. Arsitektur & struktur repo
 
 ```
-/apps/web          React 19 + Vite + Tailwind CSS + TanStack Router
+/apps/web          React 19 + Vite + Tailwind CSS + React Router
 /apps/api          Bun 1.4 + Elysia + TypeScript
-/packages/db       Drizzle ORM + SQLite, migrations, seed
 /packages/shared   Tipe, rumus skor, getCategory(), konstanta nilai dasar
 ```
 
 Monorepo workspace Bun. Rumus skor tidak diduplikasi mentah — satu modul `calculateScores()` + `getCategory()` di-shared, frontend preview memakai hasil yang sama. Tes wajib: contoh 5.4.
 
-Jangan pakai Prisma, Next.js, Solid.js, atau PostgreSQL di V2.
-
-**Auth**: JWT di httpOnly cookie.  
+**Auth**: JWT di httpOnly cookie, token version untuk session invalidation saat password berubah.  
+**Keamanan**: CSRF double-submit cookie, rate limiting login (5 percobaan/15 menit), validasi input di Elysia level, admin deactivate safeguard.  
 **File PDF**: generate di server (disarankan) atau client jsPDF; hasil harus memuat skor kanonik dari API, bukan hitungan ulang yang berbeda.  
-**Upload**: CSV di memori, max 5 MB, proses sinkron untuk V2 (<3000 baris).
+**Upload**: CSV di memori, max 5 MB, proses sinkron untuk V2 (<3000 baris).  
+**Database**: SQLite WAL mode, 14 tabel, 12 index, Drizzle ORM. Migrasi otomatis saat server start (termasuk ALTER TABLE untuk kolom baru).
 
 ---
 
@@ -794,11 +823,11 @@ Jangan pakai Prisma, Next.js, Solid.js, atau PostgreSQL di V2.
 | Page load | < 3 detik |
 | API p95 | < 500 ms |
 | List | Pagination 50 |
-| Agregat | Query langsung; cache in-memory 5 menit jika perlu |
+| Agregat | Query langsung; cache in-memory untuk hierarchy unit |
 | Concurrent | Cukup untuk ratusan user; SQLite WAL mode |
 | Uptime | Best-effort prototype; backup file SQLite harian jika deploy |
-| Keamanan | HTTPS di deploy, bcrypt, RBAC, validasi input, rate limit login 5/15 menit, audit mutasi penilaian & master data |
-| Aksesibilitas | Keyboard, label, kontras 4.5:1 |
+| Keamanan | HTTPS di deploy, bcrypt, RBAC, CSRF double-submit, validasi input, rate limit login 5/15 menit, token version untuk session invalidation, admin deactivate safeguard, audit mutasi penilaian & master data |
+| Aksesibilitas | Keyboard, label, kontras 4.5:1, Biome lint a11y |
 | Privasi | Pegawai hanya lihat milik sendiri; pimpinan terbatas unit; jangan log body password |
 
 Bukan target V2: 99.5% SLA, pentest formal, GDPR, cegah print/screenshot.
@@ -926,3 +955,40 @@ FAQ tetap:
 | Buka kembali periode | Ya, `closed → active` + audit |
 
 Tidak ada pertanyaan terbuka yang menahan build. Jika Excel Akuntabel L5 nanti diisi, cukup edit seed / master data.
+
+---
+
+## 18. Tes & performa (review 3 Sep 2026)
+
+### 18.1 Cakupan tes
+
+| File | Tipe | Jumlah | Cakupan |
+|------|------|--------|---------|
+| `packages/shared/src/scoring.test.ts` | Unit | 4 | `calculateScores`, `getCategory` |
+| `packages/shared/src/scoring.perf.test.ts` | Perf | 7 | Scoring throughput (>11M kalkulasi/detik) |
+| `packages/shared/src/master-text.test.ts` | Unit | 13 | PANDUAN (21), ANCHORS (35), FEEDBACKS (35) |
+| `packages/shared/src/constants.test.ts` | Unit | 17 | NILAI_DASAR, BARS, BUDAYA_KERJA, CODE_TO_ID roundtrip |
+| `apps/api/src/util.test.ts` | Unit | 24 | `uid`, `now`, `parseCsv`, `hashPassword`, `requireRole`, rate limiting |
+| `apps/api/src/util.perf.test.ts` | Perf | 5 | CSV throughput (>900K baris/detik) |
+| `apps/api/src/migrate.test.ts` | Integration | 6 | 14 tabel, 12 index, schema columns |
+| `apps/web/src/components/BudayaRadar.test.ts` | Type | 5 | Props type, export, kode BK-xx-xx |
+
+Total: **81 tes, 330 expect calls**.
+
+### 18.2 Performa
+
+| Operasi |Throughput | Catatan |
+|---------|-----------|---------|
+| `calculateScores` | >11M/detik | 100K iterasi < 20ms |
+| `getCategory` | >100M/detik | 100K iterasi < 1ms |
+| CSV parser | >900K baris/detik | 100K baris < 120ms |
+| `hashPassword` | bcrypt cost 10 | Async, ~100ms per hash |
+
+### 18.3 Optimasi yang diterapkan
+
+- **N+1 query fix**: Pre-built Map untuk `findByNip` di import loop
+- **Batch INSERT**: 7 feedbacks dalam satu pernyataan INSERT
+- **Cache hierarki unit**: `descendantUnitIds` di-cache per rootId
+- **Debounce search**: PersonSelect pakai `useDebounce(150ms)`
+- **Memo komponen**: `ScorePreview` dibungkus `useMemo`
+- **Index database**: 12 index pada kolom FK untuk query cepat

@@ -12,13 +12,13 @@ describe("calculateScores canonical example", () => {
 
   test("per nilai 120", () => {
     expect(result.perNilai120).toEqual({
-      BP: 24,
-      AK: 48,
-      KP: 120,
-      HM: 96,
-      LY: 72,
-      AD: 96,
-      KB: 120,
+      "ND-01-BP": 24,
+      "ND-02-AK": 48,
+      "ND-03-KP": 120,
+      "ND-04-HM": 96,
+      "ND-05-LY": 72,
+      "ND-06-AD": 96,
+      "ND-07-KB": 120,
     });
   });
 

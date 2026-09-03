@@ -1,0 +1,15 @@
+{
+  "$schema": "https://biomejs.dev/schemas/2.5.11/schema.json",
+  "files": {
+    "includes": ["apps/web/src/**/*.tsx", "apps/web/src/**/*.ts"]
+  },
+  "linter": {
+    "rules": {
+      "a11y": {
+        "noLabelWithoutControl": "error",
+        "useAltText": "error",
+        "useValidAnchor": "error"
+      }
+    }
+  }
+}
